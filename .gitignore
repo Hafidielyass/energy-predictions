@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# Data
+data/*.csv
+data/*.parquet
+input/
+
+# Models
+models/
+
+# Logs
+logs/
+
+# Notebooks
+notebooks/.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Reports
+reports/
+
+# Experiments
+experiments/
+
+# Streamlit
+.streamlit/
