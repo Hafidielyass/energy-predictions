@@ -22,12 +22,18 @@ OUT_PATH = "data/dayahead/features.parquet"
 
 BELGIUM_LAT, BELGIUM_LON, BELGIUM_ALT = 50.64, 4.67, 60.0
 
-# Elia issues the day-ahead forecast during the morning of D-1, so for a target
-# late on day D the most recent actual is already ~37 h old. Anything shorter
-# than 48 h would be available for some hours and not others — the kind of
-# quietly horizon-dependent leak that inflates offline scores and vanishes in
-# production. 48 h is the shortest lag that is safe for every hour in the window.
-LAG_HOURS = [48, 72, 168]
+# Two separate constraints set the floor here, and the tighter one wins.
+#
+# Leakage: Elia issues the day-ahead forecast during the morning of D-1, so for
+# a target late on day D the newest actual is already ~37 h old. A 24 h lag
+# would exist for some hours and not others — quietly horizon-dependent, which
+# inflates offline scores and disappears in production.
+#
+# Availability: the historical archive publishes ~1.5 days in arrears and the
+# near-real-time feed only reaches back about a day, leaving a ~24 h blind spot
+# between them. A 48 h lag is therefore trainable but *not servable* — building
+# the serving path is what exposed this. 72 h clears both constraints.
+LAG_HOURS = [72, 96, 168]
 
 WEATHER_COLS = [
     "shortwave_radiation", "direct_radiation", "diffuse_radiation",

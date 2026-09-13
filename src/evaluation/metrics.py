@@ -58,6 +58,72 @@ def skill_score(model_rmse: float, baseline_rmse: float) -> float:
     return float(1.0 - model_rmse / baseline_rmse)
 
 
+def pinball_loss(y_true: pd.Series, y_pred: pd.Series, quantile: float) -> float:
+    """
+    The proper scoring rule for a single quantile forecast.
+
+    Under-prediction is penalised by `quantile` and over-prediction by
+    `1 - quantile`, so a P90 model is punished nine times harder for coming in
+    under the truth than over it. That asymmetry is what makes the model learn
+    an actual upper bound rather than drifting back toward the mean.
+    """
+    err = y_true - y_pred
+    return float(100 * np.maximum(quantile * err, (quantile - 1) * err).mean())
+
+
+def coverage(y_true: pd.Series, lower: pd.Series, upper: pd.Series) -> float:
+    """
+    Fraction of observations that landed inside the interval.
+
+    A P10-P90 band should contain 80% of outcomes. Materially below that and
+    the interval is lying about its confidence; materially above and it is
+    padded so wide it carries no information.
+    """
+    return float(100 * ((y_true >= lower) & (y_true <= upper)).mean())
+
+
+def sharpness(lower: pd.Series, upper: pd.Series) -> float:
+    """
+    Mean interval width, as a percentage of installed capacity.
+
+    Only meaningful alongside coverage: any model can achieve perfect coverage
+    by predicting "somewhere between zero and maximum". Narrow *and* correctly
+    covered is the goal.
+    """
+    return float(100 * (upper - lower).mean())
+
+
+def score_intervals(
+    y_true: pd.Series,
+    lower: pd.Series,
+    median: pd.Series,
+    upper: pd.Series,
+    is_day: Optional[pd.Series] = None,
+    label: str = "model",
+) -> Dict[str, float]:
+    """Combined calibration and sharpness summary for a P10/P50/P90 forecast."""
+    if is_day is not None:
+        mask = is_day == 1
+        y_true, lower, median, upper = (
+            y_true[mask], lower[mask], median[mask], upper[mask]
+        )
+
+    return {
+        "label": label,
+        "n": int(len(y_true)),
+        "coverage_%": coverage(y_true, lower, upper),
+        "width_%": sharpness(lower, upper),
+        "pinball_P10": pinball_loss(y_true, lower, 0.10),
+        "pinball_P50": pinball_loss(y_true, median, 0.50),
+        "pinball_P90": pinball_loss(y_true, upper, 0.90),
+        "pinball_mean": float(np.mean([
+            pinball_loss(y_true, lower, 0.10),
+            pinball_loss(y_true, median, 0.50),
+            pinball_loss(y_true, upper, 0.90),
+        ])),
+    }
+
+
 def report(results: list, baseline_label: str = "Elia day-ahead") -> pd.DataFrame:
     """Render a comparison table, with skill measured against the baseline row."""
     frame = pd.DataFrame(results).set_index("label")

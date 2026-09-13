@@ -17,6 +17,13 @@ import requests
 
 EXPORT_URL = "https://opendata.elia.be/api/explore/v2.1/catalog/datasets/ods032/exports/csv"
 
+# ODS032 is the historical archive and stops at the present; forecasts for days
+# that have not happened yet live in the near-real-time dataset, which publishes
+# the same forecast columns up to a week ahead.
+FORECAST_EXPORT_URL = (
+    "https://opendata.elia.be/api/explore/v2.1/catalog/datasets/ods087/exports/csv"
+)
+
 NUMERIC_COLS = [
     "measured",
     "mostrecentforecast", "mostrecentconfidence10", "mostrecentconfidence90",
@@ -78,6 +85,40 @@ def fetch(
         df.to_parquet(cache_path, compression="snappy")
 
     return df
+
+
+def fetch_forecast(
+    start: str,
+    end: str,
+    region: str = "Belgium",
+    timeout: int = 180,
+) -> pd.DataFrame:
+    """
+    Download Elia's forward-looking forecasts (ODS087) for a future window.
+
+    Used at serving time only. The columns match `fetch`, except that actual
+    generation arrives as ``realtime`` and is renamed to ``measured`` so the
+    downstream feature code does not need to know which source it came from.
+    """
+    where = f'region="{region}" and datetime>="{start}" and datetime<"{end}"'
+    url = f"{FORECAST_EXPORT_URL}?where={quote(where)}&limit=-1&delimiter=%3B"
+
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+
+    from io import StringIO
+    df = pd.read_csv(StringIO(resp.text), sep=";")
+    df = df.rename(columns={"realtime": "measured"})
+
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True, format="mixed")
+    df = df.sort_values("datetime").set_index("datetime")
+    df.index.name = "datetime"
+
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df.drop(columns=["resolutioncode"], errors="ignore")
 
 
 def to_hourly(df: pd.DataFrame) -> pd.DataFrame:

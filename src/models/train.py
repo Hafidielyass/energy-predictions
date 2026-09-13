@@ -26,7 +26,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 
 from src.evaluation.metrics import report, score
-from src.features.build_features import FEATURE_COLS, TARGET_COL
+from src.features.build_features import FEATURE_COLS, LAG_HOURS, TARGET_COL
 from src.preprocessing.split import VAL_END, chronological_split
 
 FEATURES_PATH = "data/dayahead/features.parquet"
@@ -60,10 +60,13 @@ def main() -> pd.DataFrame:
     results = [score(y_test, test_d["elia_dayahead_cf"], label="Elia day-ahead")]
 
     # ── B0: clear-sky-scaled persistence ──────────────────────────────────
+    # Uses whatever the shortest servable lag is, rescaled by how far the
+    # clear-sky ceiling has moved since — a naive lag would drift with season.
+    lag = LAG_HOURS[0]
     ratio = (test_d["clearsky_ghi"] /
-             test_d["clearsky_ghi"].shift(48).replace(0, np.nan)).fillna(1.0)
-    persistence = (test_d["cf_lag_48h"] * ratio.clip(0.5, 2.0)).clip(0, 1)
-    results.append(score(y_test, persistence, label="B0 clearsky-persistence"))
+             test_d["clearsky_ghi"].shift(lag).replace(0, np.nan)).fillna(1.0)
+    persistence = (test_d[f"cf_lag_{lag}h"] * ratio.clip(0.5, 2.0)).clip(0, 1)
+    results.append(score(y_test, persistence, label=f"B0 persistence ({lag}h)"))
 
     # ── B1: Ridge ─────────────────────────────────────────────────────────
     alpha = chosen["ridge"]["alpha"]
