@@ -13,16 +13,18 @@ venv/
 # Environment variables
 .env
 
-# Data
-data/*.csv
-data/*.parquet
-input/
+# Data — all of it is re-fetchable from the Elia and Open-Meteo APIs, so the
+# caches and derived feature tables stay out of version control. Anchored with
+# a leading slash: an unanchored "data/" also matches src/data/ and would
+# silently exclude pipeline source code.
+/data/
 
-# Models
-models/
+# Models — trained artefacts, reproducible from the pipeline. Anchored so it
+# does not also swallow src/models/.
+/models/
 
 # Logs
-logs/
+/logs/
 
 # Notebooks
 notebooks/.ipynb_checkpoints/
@@ -39,10 +41,10 @@ Thumbs.db
 .ipynb_checkpoints/
 
 # Reports
-reports/
+/reports/
 
 # Experiments
-experiments/
+/experiments/
 
 # Streamlit
 .streamlit/
