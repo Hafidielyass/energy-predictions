@@ -14,10 +14,28 @@ import pandas as pd
 
 from src.data import elia, openmeteo
 
-# Geographic centre of Belgium. Elia's "Belgium" series is a national
-# aggregate, so a single grid point is an approximation; weighting several
-# points by installed capacity per region is the obvious later refinement.
+# Geographic centre of Belgium, kept for solar geometry — the sun's position
+# varies little across a country 300 km wide, so one point is ample there.
 BELGIUM_LAT, BELGIUM_LON = 50.64, 4.67
+
+# Weather is a different matter: cloud over Antwerp is not cloud over Arlon.
+# Each of Belgium's eleven provinces is sampled at its capital and weighted by
+# the PV capacity Elia reports for it, so the forecast the model sees reflects
+# the weather where the panels actually are. Capacities are from Elia's own
+# per-region monitoredcapacity and sum to the national 12,128 MW.
+PROVINCES = {
+    "East-Flanders":   (51.05, 3.72, 2039.7),
+    "Antwerp":         (51.22, 4.40, 2029.0),
+    "West-Flanders":   (51.21, 3.22, 1911.9),
+    "Limburg":         (50.93, 5.34, 1565.2),
+    "Flemish-Brabant": (50.88, 4.70, 1168.0),
+    "Hainaut":         (50.45, 3.95, 1058.3),
+    "Liege":           (50.63, 5.57,  854.1),
+    "Namur":           (50.47, 4.87,  444.6),
+    "Luxembourg":      (49.68, 5.81,  368.0),
+    "Walloon-Brabant": (50.72, 4.61,  358.2),
+    "Brussels":        (50.85, 4.35,  331.4),
+}
 
 # Elia reaches back to 2020-09, but the Open-Meteo previous-runs archive only
 # starts in 2024 — the binding constraint on how much history is usable. Rows
@@ -39,10 +57,10 @@ def build(force: bool = False) -> pd.DataFrame:
     gen_h = elia.to_hourly(gen)
     print(f"  {len(gen_h):,} rows after hourly aggregation")
 
-    print(f"Open-Meteo previous runs (lead 1 day) @ {BELGIUM_LAT}, {BELGIUM_LON}")
-    nwp = openmeteo.fetch(
-        BELGIUM_LAT, BELGIUM_LON, START, END,
-        cache_path=NWP_CACHE, force=force,
+    print(f"Open-Meteo previous runs (lead 1 day), {len(PROVINCES)} provinces "
+          f"weighted by installed capacity:")
+    nwp = openmeteo.fetch_weighted(
+        PROVINCES, START, END, cache_path=NWP_CACHE, force=force,
     )
     print(f"  {len(nwp):,} hourly rows, {len(nwp.columns)} variables")
 

@@ -35,10 +35,14 @@ BELGIUM_LAT, BELGIUM_LON, BELGIUM_ALT = 50.64, 4.67, 60.0
 # the serving path is what exposed this. 72 h clears both constraints.
 LAG_HOURS = [72, 96, 168]
 
+# All capacity-weighted across the eleven provinces. ghi_dispersion is the
+# weighted spread of irradiance between them: high means the country is partly
+# clouded and aggregate output is smoother than any single location implies.
 WEATHER_COLS = [
     "shortwave_radiation", "direct_radiation", "diffuse_radiation",
     "direct_normal_irradiance", "temperature_2m", "cloud_cover",
     "relative_humidity_2m", "wind_speed_10m", "precipitation",
+    "ghi_dispersion",
 ]
 
 SOLAR_COLS = [

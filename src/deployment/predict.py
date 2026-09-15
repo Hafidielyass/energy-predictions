@@ -16,11 +16,12 @@ import sys
 from typing import Optional
 
 import joblib
+import numpy as np
 import pandas as pd
 import requests
 
 from src.data import elia
-from src.data.build_dataset import BELGIUM_LAT, BELGIUM_LON
+from src.data.build_dataset import BELGIUM_LAT, BELGIUM_LON, PROVINCES
 from src.data.openmeteo import BACKWARD_AVERAGED, DEFAULT_VARIABLES
 from src.features.build_features import (
     FEATURE_COLS, LAG_HOURS, _add_calendar, _add_lags, _add_physics,
@@ -35,11 +36,11 @@ QUANTILE_MODEL = "models/dayahead/lgbm_quantile.pkl"
 HISTORY_DAYS = max(LAG_HOURS) // 24 + 10
 
 
-def fetch_live_weather(target: pd.Timestamp) -> pd.DataFrame:
-    """Live NWP for the target day, converted to the training convention."""
+def _fetch_live_point(lat: float, lon: float, target: pd.Timestamp) -> pd.DataFrame:
+    """Live NWP for one location, converted to the training convention."""
     params = {
-        "latitude": BELGIUM_LAT,
-        "longitude": BELGIUM_LON,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": ",".join(DEFAULT_VARIABLES),
         "start_date": target.strftime("%Y-%m-%d"),
         # One extra day so the backward-average shift below still has a value
@@ -60,6 +61,31 @@ def fetch_live_weather(target: pd.Timestamp) -> pd.DataFrame:
     interval_cols = [c for c in frame.columns if c in BACKWARD_AVERAGED]
     frame[interval_cols] = frame[interval_cols].shift(-1)
     return frame
+
+
+def fetch_live_weather(target: pd.Timestamp) -> pd.DataFrame:
+    """
+    Capacity-weighted live forecast across the provinces.
+
+    Must mirror `openmeteo.fetch_weighted` exactly — same sites, same weights,
+    same dispersion term. Training on capacity-weighted weather while serving a
+    single point would be a train/serve skew invisible to every offline metric.
+    """
+    total = sum(w for _, _, w in PROVINCES.values())
+
+    frames, weights = {}, {}
+    for name, (lat, lon, weight) in PROVINCES.items():
+        frames[name] = _fetch_live_point(lat, lon, target)
+        weights[name] = weight / total
+
+    columns = next(iter(frames.values())).columns
+    weighted = sum(frames[n][columns] * w for n, w in weights.items())
+
+    ghi = pd.concat({n: f["shortwave_radiation"] for n, f in frames.items()}, axis=1)
+    mean = weighted["shortwave_radiation"]
+    variance = sum(weights[n] * (ghi[n] - mean) ** 2 for n in frames)
+    weighted["ghi_dispersion"] = np.sqrt(variance)
+    return weighted
 
 
 def forecast(target_date: Optional[str] = None) -> pd.DataFrame:

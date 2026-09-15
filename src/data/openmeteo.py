@@ -9,8 +9,9 @@ issue time the true weather does not exist yet, only a forecast of it.
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -114,6 +115,62 @@ def fetch(
         df.to_parquet(cache_path, compression="snappy")
 
     return df
+
+
+def fetch_weighted(
+    sites: Dict[str, Tuple[float, float, float]],
+    start: str,
+    end: str,
+    variables: Optional[List[str]] = None,
+    lead_days: int = 1,
+    cache_path: Optional[str] = None,
+    force: bool = False,
+) -> pd.DataFrame:
+    """
+    Capacity-weighted average of forecasts across several locations.
+
+    A national fleet does not experience national-average weather at a single
+    point. Cloud over Antwerp matters in proportion to how many panels sit in
+    Antwerp, so each site's forecast is weighted by its installed capacity.
+
+    Also returns ``ghi_dispersion``: the capacity-weighted standard deviation
+    of irradiance across sites. When it is high the country is partly clouded
+    and aggregate output is smoother than any single point would suggest; when
+    near zero the whole fleet shares one sky. A single-point forecast cannot
+    express that distinction at all.
+
+    Parameters
+    ----------
+    sites : dict
+        ``{name: (latitude, longitude, weight)}``. Weights need not be
+        normalised.
+    """
+    if cache_path and Path(cache_path).exists() and not force:
+        return pd.read_parquet(cache_path)
+
+    variables = variables or DEFAULT_VARIABLES
+    total_weight = sum(w for _, _, w in sites.values())
+
+    frames, weights = {}, {}
+    for name, (lat, lon, weight) in sites.items():
+        frames[name] = fetch(lat, lon, start, end, variables, lead_days)
+        weights[name] = weight / total_weight
+        print(f"    {name:<18} {weight:>8.1f} MW  ({100*weights[name]:>5.2f}%)")
+
+    columns = next(iter(frames.values())).columns
+    weighted = sum(frames[n][columns] * w for n, w in weights.items())
+
+    # Weighted spread of GHI across sites, as a spatial-heterogeneity signal.
+    ghi = pd.concat({n: f["shortwave_radiation"] for n, f in frames.items()}, axis=1)
+    mean = weighted["shortwave_radiation"]
+    variance = sum(weights[n] * (ghi[n] - mean) ** 2 for n in frames)
+    weighted["ghi_dispersion"] = np.sqrt(variance)
+
+    if cache_path:
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        weighted.to_parquet(cache_path, compression="snappy")
+
+    return weighted
 
 
 def _year_chunks(start: str, end: str):
