@@ -117,6 +117,49 @@ def fetch(
     return df
 
 
+def fetch_sites(
+    sites: Dict[str, Tuple[float, float, float]],
+    start: str,
+    end: str,
+    variables: Optional[List[str]] = None,
+    lead_days: int = 1,
+    cache_path: Optional[str] = None,
+    force: bool = False,
+) -> pd.DataFrame:
+    """
+    Per-site forecasts kept separate, as a long frame.
+
+    `fetch_weighted` collapses the sites into one national average, which is
+    what a single aggregate target needs. Modelling each province against its
+    own local weather needs them kept apart — averaging first would erase
+    exactly the spatial variation that makes the panel informative.
+
+    Returns
+    -------
+    pd.DataFrame indexed by UTC datetime with a ``region`` column, one block of
+    rows per site.
+    """
+    if cache_path and Path(cache_path).exists() and not force:
+        return pd.read_parquet(cache_path)
+
+    variables = variables or DEFAULT_VARIABLES
+
+    frames = []
+    for name, (lat, lon, _) in sites.items():
+        frame = fetch(lat, lon, start, end, variables, lead_days)
+        frame["region"] = name
+        frames.append(frame)
+        print(f"    {name:<18} {len(frame):,} hourly rows")
+
+    panel = pd.concat(frames).sort_index()
+
+    if cache_path:
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        panel.to_parquet(cache_path, compression="snappy")
+
+    return panel
+
+
 def fetch_weighted(
     sites: Dict[str, Tuple[float, float, float]],
     start: str,
