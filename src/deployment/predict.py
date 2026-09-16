@@ -30,6 +30,7 @@ from src.features.solar import add_solar_features
 
 LIVE_API = "https://api.open-meteo.com/v1/forecast"
 QUANTILE_MODEL = "models/dayahead/lgbm_quantile.pkl"
+RIDGE_MODEL = "models/dayahead/ridge.pkl"
 
 # Enough history behind the target date to satisfy the longest lag and the
 # seven-day rolling mean, plus a margin for any late-arriving Elia rows.
@@ -88,6 +89,30 @@ def fetch_live_weather(target: pd.Timestamp) -> pd.DataFrame:
     return weighted
 
 
+def apply_physical_guardrails(
+    predictions: pd.DataFrame, frame: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Impose what physics guarantees but a daylight-trained model cannot know.
+
+    Night is outside the distribution the models ever saw, so they emit
+    arbitrary constants there — an early version predicted 76 MW at midnight
+    with a P90 of 1261 MW at 3 am. Output before sunrise and after sunset is
+    zero by physics, not by prediction.
+
+    The same failure survives into twilight, where the upper quantile drifts
+    far above anything the sun could supply. A cloudless sky is a hard ceiling:
+    no forecast may exceed the capacity factor that clear-sky irradiance alone
+    would permit at full nameplate conversion — already a generous bound, since
+    real systems never convert that efficiently.
+    """
+    guarded = predictions.copy()
+    guarded.loc[frame["is_day"] == 0, :] = 0.0
+
+    ceiling = (frame["clearsky_ghi"] / 1000.0).clip(0.0, 1.0)
+    return guarded.clip(upper=ceiling, axis=0)
+
+
 def forecast(target_date: Optional[str] = None) -> pd.DataFrame:
     """
     Forecast Belgian PV output for one day, with a P10/P50/P90 band.
@@ -99,8 +124,8 @@ def forecast(target_date: Optional[str] = None) -> pd.DataFrame:
     target = target.normalize()
     print(f"Forecasting {target:%Y-%m-%d} (UTC)")
 
-    bundle = joblib.load(QUANTILE_MODEL)
-    models = bundle["models"]
+    quantile_models = joblib.load(QUANTILE_MODEL)["models"]
+    ridge = joblib.load(RIDGE_MODEL)
 
     history_start = (target - pd.Timedelta(days=HISTORY_DAYS)).strftime("%Y-%m-%d")
     end = (target + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -142,23 +167,21 @@ def forecast(target_date: Optional[str] = None) -> pd.DataFrame:
 
     X = usable[FEATURE_COLS]
     predictions = pd.DataFrame(index=usable.index)
-    for name, model in models.items():
+    for name, model in quantile_models.items():
         predictions[name] = model.predict(X).clip(0, 1)
 
-    # The models were fitted on daylight rows only, so night is outside the
-    # distribution they ever saw and they emit arbitrary constants there.
-    # Output before sunrise and after sunset is zero by physics, not by
-    # prediction, so it is imposed rather than inferred.
-    night = usable["is_day"] == 0
-    predictions.loc[night, :] = 0.0
+    # The central estimate averages Ridge with LightGBM rather than picking one.
+    # They are statistically tied and disagree about which is better depending
+    # on the period evaluated — LightGBM wins on the development years, Ridge on
+    # the test year — so averaging hedges an instability we cannot resolve. It
+    # also scored best on the development folds, where the choice was made
+    # without consulting held-out data.
+    predictions["P50"] = (
+        predictions["P50"]
+        + ridge["model"].predict(ridge["scaler"].transform(X)).clip(0, 1)
+    ) / 2
 
-    # Same failure mode survives into twilight, where the upper quantile drifts
-    # toward a constant far above anything the sun could supply. A cloudless sky
-    # is a hard physical ceiling — no forecast may exceed the capacity factor
-    # that the clear-sky irradiance alone would permit at full nameplate
-    # conversion, which is already a generous bound.
-    ceiling = (usable["clearsky_ghi"] / 1000.0).clip(0.0, 1.0)
-    predictions = predictions.clip(upper=ceiling, axis=0)
+    predictions = apply_physical_guardrails(predictions, usable)
 
     # Independent quantile fits can cross; sort each row to restore ordering.
     predictions[["P10", "P50", "P90"]] = pd.DataFrame(
